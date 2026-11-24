@@ -51,26 +51,37 @@ class Album(SongList):
             "url": url,
         }
 
-        album_response = spotify_client.album_tracks(url)
-        if album_response is None:
-            raise AlbumError(
-                "Couldn't get metadata, check if you have passed correct album id"
-            )
+        album_Tracks_meta = album_metadata.get("tracks", {})
+        embedded_items = album_Tracks_meta.get("items") or []
+        total_tracks = album_metadata.get("total_tracks") or 0
 
-        tracks = album_response["items"]
-
-        # Get all tracks from album
-        while album_response["next"]:
-            album_response = spotify_client.next(album_response)
-
-            # Failed to get response, break the loop
+        if (
+            embedded_items
+            and not album_Tracks_meta.get("next")
+            and len(embedded_items) >= total_tracks
+        ):
+            tracks = embedded_items
+        else:
+            album_response = spotify_client.album_tracks(url)
             if album_response is None:
-                break
+                raise AlbumError(
+                    "Couldn't get metadata, check if you have passed correct album id"
+                )
 
-            tracks.extend(album_response["items"])
+            tracks = album_response["items"]
 
-        if album_response is None:
-            raise AlbumError(f"Failed to get album response: {url}")
+            # Get all tracks from album
+            while album_response["next"]:
+                album_response = spotify_client.next(album_response)
+
+                # Failed to get response, break the loop
+                if album_response is None:
+                    break
+
+                tracks.extend(album_response["items"])
+
+            if album_response is None:
+                raise AlbumError(f"Failed to get album response: {url}")
 
         songs = []
         for track in tracks:

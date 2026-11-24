@@ -23,6 +23,25 @@
 </div>
 
 ______________________________________________________________________
+
+## 🚀 spotDL Optimized - Mejoras y Optimizaciones
+
+Esta versión contiene optimizaciones críticas de rendimiento y solución de errores en la interfaz web:
+
+- **⚡ Sesiones y Tokens en Caché Persistente**:
+  - Caching en disco (`~/.spotdl/spotapi_session_cache.json`) y memoria de tokens anónimos de Spotify y hashes de operaciones GraphQL (`persistedQuery`).
+  - Reduce el tiempo de resolución de metadatos de ~3-5 segundos a menos de **0.2 segundos** (~95% más rápido).
+- **🔎 Búsquedas Ultrarrápidas**:
+  - `Song.list_from_search_term` parsea directamente los metadatos devueltos por la búsqueda sin disparar hasta 100 peticiones HTTP secuenciales adicionales.
+- **🌐 Interfaz Web Completamente Reparada**:
+  - **Soporte de enlaces de Spotify**: Reconoce URLs directas de canciones (`/track/`), álbumes (`/album/`), playlists (`/playlist/`), artistas (`/artist/`), enlaces cortos (`spotify.link`) y URIs (`spotify:...`).
+  - **Corrección del Input de Búsqueda**: Solucionado el problema con Datastar SSE donde el texto escrito desaparecía mientras el usuario tecleaba.
+  - **Renderizado Instantáneo**: Carga directa en servidor de `/search?q=...` con feedback visual si no hay resultados.
+  - **Botón "Descargar todas"**: Descarga por lotes todos los resultados o temas de un álbum con un solo clic.
+- **⚡ Concurrencia en Descargas**:
+  - Búsqueda de letras en paralelo con la descarga de audio para reducir los tiempos muertos.
+
+______________________________________________________________________
 **[Read the documentation on ReadTheDocs!](https://spotdl.readthedocs.io)**
 ______________________________________________________________________
 

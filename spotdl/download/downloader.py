@@ -592,21 +592,8 @@ class Downloader:
                             exc,
                         )
 
-            # Find song lyrics and add them to the song object
-            try:
-                lyrics = await loop.run_in_executor(None, self.search_lyrics, song)
-                if lyrics is None:
-                    logger.debug(
-                        "No lyrics found for %s, lyrics providers: %s",
-                        song.display_name,
-                        ", ".join(
-                            [lprovider.name for lprovider in self.lyrics_providers]
-                        ),
-                    )
-                else:
-                    song.lyrics = lyrics
-            except Exception as exc:
-                logger.debug("Could not search for lyrics: %s", exc)
+            # Start song lyrics search in parallel so it overlaps with audio search & download
+            lyrics_future = loop.run_in_executor(None, self.search_lyrics, song)
 
             # If the file already exists and we want to overwrite the metadata,
             # we can skip the download
@@ -656,6 +643,14 @@ class Downloader:
                     display_progress_tracker.notify_complete()
 
                     return song, None
+
+                # Wait for parallel lyrics search before embedding metadata
+                try:
+                    lyrics = await lyrics_future
+                    if lyrics:
+                        song.lyrics = lyrics
+                except Exception as exc:
+                    logger.debug("Could not search for lyrics: %s", exc)
 
                 # Update the metadata
                 await loop.run_in_executor(
@@ -862,6 +857,13 @@ class Downloader:
                     # Delete the files that were created by the post processor
                     for file_to_delete in files_to_delete:
                         Path(file_to_delete).unlink()
+
+            try:
+                lyrics = await lyrics_future
+                if lyrics:
+                    song.lyrics = lyrics
+            except Exception as exc:
+                logger.debug("Could not search for lyrics: %s", exc)
 
             try:
                 await loop.run_in_executor(

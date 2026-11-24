@@ -1,4 +1,4 @@
-<div id="search-list" data-signals="{'song_url': {}}">
+<div id="search-list" data-signals="{'song_url': ''}">
     <script>
         function download(client_id, song) {
             console.log("Downloading song:", song);
@@ -20,7 +20,26 @@
                 console.error("Error:", error);
             });
         }
+
+        function downloadAllVisible() {
+            const buttons = document.querySelectorAll('#search-list button[id^="download-"]');
+            buttons.forEach((btn, i) => {
+                setTimeout(() => btn.click(), i * 150);
+            });
+        }
     </script>
+    {% if songs|length == 0 %}
+    <div class="alert alert-warning shadow-lg m-4">
+        <span>No se encontraron resultados para la búsqueda. Verifica el término o el enlace de Spotify.</span>
+    </div>
+    {% elif songs|length > 1 %}
+    <div class="flex justify-between items-center mx-4 my-2">
+        <span class="text-sm opacity-80">{{ songs|length }} canciones encontradas</span>
+        <button type="button" class="btn btn-sm btn-secondary" onclick="downloadAllVisible()">
+            Descargar todas ({{ songs|length }})
+        </button>
+    </div>
+    {% endif %}
     {% for song in songs %}
     <div key="{{loop.index0}}" class="card md:card-side card-bordered m-2 shadow-lg card-compact bg-base-100">
         <figure class="aspect-square md:max-h-fit">

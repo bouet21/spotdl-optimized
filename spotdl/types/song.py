@@ -93,13 +93,14 @@ class Song:
         if raw_track_meta["duration_ms"] == 0 or raw_track_meta["name"].strip() == "":
             raise SongError(f"Track no longer exists: {url}")
 
-        # get artist info
+        # get artist and album info (skip artist call on SpotipyFree when album already has data)
         primary_artist_id = raw_track_meta["artists"][0]["id"]
-        raw_artist_meta: Dict[str, Any] = spotify_client.artist(primary_artist_id)  # type: ignore
-
-        # get album info
         album_id = raw_track_meta["album"]["id"]
         raw_album_meta: Dict[str, Any] = spotify_client.album(album_id)  # type: ignore
+        if SpotifyClient.is_using_official_api():
+            raw_artist_meta: Dict[str, Any] = spotify_client.artist(primary_artist_id)  # type: ignore
+        else:
+            raw_artist_meta = {"genres": []}
 
         # create song object
         return cls(
@@ -195,11 +196,70 @@ class Song:
         raw_search_results = Song.search(search_term)
 
         songs = []
-        for idx, _ in enumerate(raw_search_results.get("tracks", []).get("items", [])):
+        for raw_track_meta in raw_search_results.get("tracks", {}).get("items", []):
+            if not isinstance(raw_track_meta, dict) or not raw_track_meta.get("id"):
+                continue
+
+            album_meta = raw_track_meta.get("album") or {}
+            release_date = album_meta.get("release_date") or ""
+            artists = [
+                artist["name"]
+                for artist in raw_track_meta.get("artists", [])
+                if isinstance(artist, dict) and artist.get("name")
+            ]
+            album_artists = [
+                artist["name"]
+                for artist in album_meta.get("artists", [])
+                if isinstance(artist, dict) and artist.get("name")
+            ]
+            images = album_meta.get("images") or []
+            track_id = raw_track_meta["id"]
             songs.append(
-                Song.from_url(
-                    "http://open.spotify.com/track/"
-                    + raw_search_results["tracks"]["items"][idx]["id"]
+                Song.from_missing_data(
+                    name=raw_track_meta.get("name", ""),
+                    artists=artists,
+                    artist=artists[0] if artists else "",
+                    artist_id=(
+                        raw_track_meta["artists"][0].get("id")
+                        if raw_track_meta.get("artists")
+                        else None
+                    ),
+                    album_id=album_meta.get("id"),
+                    album_name=album_meta.get("name", ""),
+                    album_artist=(
+                        album_artists[0]
+                        if album_artists
+                        else (artists[0] if artists else "")
+                    ),
+                    album_type=album_meta.get("album_type"),
+                    disc_number=raw_track_meta.get("disc_number", 1),
+                    duration=int((raw_track_meta.get("duration_ms") or 0) / 1000),
+                    year=(
+                        int(release_date[:4])
+                        if len(release_date) >= 4 and release_date[:4].isdigit()
+                        else 0
+                    ),
+                    date=release_date,
+                    track_number=raw_track_meta.get("track_number", 1),
+                    tracks_count=album_meta.get("total_tracks", 0),
+                    isrc=raw_track_meta.get("external_ids", {}).get("isrc"),
+                    song_id=track_id,
+                    explicit=bool(raw_track_meta.get("explicit", False)),
+                    publisher=album_meta.get("label", ""),
+                    url=raw_track_meta.get("external_urls", {}).get(
+                        "spotify",
+                        f"https://open.spotify.com/track/{track_id}",
+                    ),
+                    popularity=raw_track_meta.get("popularity"),
+                    cover_url=(
+                        max(
+                            images,
+                            key=lambda i: (i.get("width") or 0)
+                            * (i.get("height") or 0),
+                        ).get("url")
+                        if images
+                        else None
+                    ),
                 )
             )
 

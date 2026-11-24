@@ -3,10 +3,12 @@ Module which contains the web client routes and functions.
 """
 
 import asyncio
+import re
 import uuid
 from pathlib import Path
-from typing import Any, Optional, cast
+from typing import Any, List, Optional, cast
 
+import requests
 # from datastar_py.sse import DatastarEvent
 from datastar_py.fastapi import ReadSignals
 from datastar_py.fastapi import (
@@ -17,11 +19,15 @@ from fastapi.templating import Jinja2Templates
 
 from spotdl._version import __version__
 from spotdl.download.downloader import AUDIO_PROVIDERS, LYRICS_PROVIDERS
+from spotdl.types.album import Album
+from spotdl.types.artist import Artist
+from spotdl.types.playlist import Playlist
 from spotdl.types.song import Song
 from spotdl.utils.config import get_spotdl_path
 from spotdl.utils.ffmpeg import FFMPEG_FORMATS
-from spotdl.utils.search import get_search_results
-from spotdl.utils.web import Client, app_state, validate_search_term
+from spotdl.utils.search import get_search_results, get_simple_songs
+from spotdl.utils.spotify import SpotifyClient
+from spotdl.utils.web import Client, app_state
 from spotdl.web.utils import Signals, datastar_response, handle_signals
 
 __all__ = ["router"]
@@ -32,6 +38,172 @@ templates = Jinja2Templates(directory=Path(__file__).parent / "components")
 
 
 # PATHS
+
+
+SPOTIFY_URL_RE = re.compile(
+    r"(?:https?://)?open\.spotify\.com/(?:intl-[^/\s]+/)?(track|album|playlist|artist)/([A-Za-z0-9]+)",
+    re.IGNORECASE,
+)
+SPOTIFY_URI_RE = re.compile(
+    r"spotify:(track|album|playlist|artist):([A-Za-z0-9]+)",
+    re.IGNORECASE,
+)
+SPOTIFY_SHORT_URL_RE = re.compile(
+    r"https?://spotify\.link/[A-Za-z0-9]+",
+    re.IGNORECASE,
+)
+
+
+def _fast_artist_songs(artist_url: str) -> List[Song]:
+    """
+    Fast artist song loader for the web UI: fetches the artist's top tracks and
+    primary releases concurrently without crawling dozens of albums sequentially.
+    """
+    spotify_client = SpotifyClient()
+    if hasattr(spotify_client, "raw_artist_union"):
+        artist_union = spotify_client.raw_artist_union(artist_url)
+        artist_name = (
+            artist_union.get("profile", {}).get("name")
+            or artist_union.get("name")
+            or ""
+        )
+        songs: List[Song] = []
+        seen_ids = set()
+
+        # 1. Extract topTracks immediately from the single artistUnion response
+        top_items = (
+            artist_union.get("discography", {})
+            .get("topTracks", {})
+            .get("items", [])
+        )
+        for item in top_items:
+            track = item.get("track") if isinstance(item, dict) else None
+            if not isinstance(track, dict):
+                continue
+            tid = track.get("id") or (track.get("uri") or "").split(":")[-1]
+            if not tid or tid in seen_ids:
+                continue
+            seen_ids.add(tid)
+            artists = [
+                a.get("profile", {}).get("name") or a.get("name") or artist_name
+                for a in track.get("artists", {}).get("items", [])
+                if isinstance(a, dict)
+            ] or [artist_name]
+            album_of_track = track.get("albumOfTrack") or {}
+            sources = album_of_track.get("coverArt", {}).get("sources") or []
+            cover_url = (
+                max(
+                    sources,
+                    key=lambda s: (s.get("width") or 0) * (s.get("height") or 0),
+                ).get("url")
+                if sources
+                else None
+            )
+            dur_ms = (
+                track.get("duration", {}).get("totalMilliseconds")
+                or track.get("duration_ms")
+                or 0
+            )
+            explicit = (
+                track.get("contentRating", {}).get("label") == "EXPLICIT"
+                or bool(track.get("explicit"))
+            )
+            songs.append(
+                Song.from_missing_data(
+                    name=track.get("name", ""),
+                    artists=artists,
+                    artist=artists[0],
+                    album_name=album_of_track.get("name", ""),
+                    album_artist=artists[0],
+                    duration=int(dur_ms / 1000),
+                    song_id=tid,
+                    explicit=explicit,
+                    url=f"https://open.spotify.com/track/{tid}",
+                    cover_url=cover_url,
+                )
+            )
+
+        # 2. Enrich with search results for this artist so the user gets up to 100 tracks fast
+        if artist_name:
+            try:
+                for s in get_search_results(artist_name):
+                    if s.song_id not in seen_ids and (
+                        artist_name.lower() in s.artist.lower()
+                        or any(artist_name.lower() in a.lower() for a in s.artists)
+                    ):
+                        seen_ids.add(s.song_id)
+                        songs.append(s)
+            except Exception:
+                pass
+
+        if songs:
+            return songs
+
+    return Artist.from_url(artist_url, fetch_songs=False).songs
+
+
+def resolve_search_query(raw_query: str) -> List[Song]:
+    """
+    Resolve any search query or Spotify/YouTube link into a list of Song objects.
+    """
+    query = (raw_query or "").strip()
+    if not query:
+        return []
+
+    # Resolve spotify.link short URLs
+    short_match = SPOTIFY_SHORT_URL_RE.search(query)
+    if short_match:
+        try:
+            resp = requests.head(
+                short_match.group(0), allow_redirects=True, timeout=10
+            )
+            query = resp.url
+        except Exception:
+            pass
+
+    # Extract Spotify URI if present
+    uri_match = SPOTIFY_URI_RE.search(query)
+    if uri_match:
+        kind, item_id = uri_match.group(1).lower(), uri_match.group(2)
+        query = f"https://open.spotify.com/{kind}/{item_id}"
+
+    # Extract Spotify URL (including /intl-es/ or surrounding text)
+    url_match = SPOTIFY_URL_RE.search(query)
+    if url_match:
+        kind, item_id = url_match.group(1).lower(), url_match.group(2)
+        clean_url = f"https://open.spotify.com/{kind}/{item_id}"
+        try:
+            if kind == "track":
+                return [Song.from_url(clean_url)]
+            if kind == "album":
+                return Album.from_url(clean_url, fetch_songs=False).songs
+            if kind == "playlist":
+                return Playlist.from_url(clean_url, fetch_songs=False).songs
+            if kind == "artist":
+                return _fast_artist_songs(clean_url)
+        except Exception as exc:
+            app_state.logger.error(f"Error resolving Spotify URL {clean_url}: {exc}")
+            return []
+
+    # Handle YouTube URLs or prefixed queries (artist:, album:, playlist:)
+    if query.startswith(("artist:", "album:", "playlist:")) or any(
+        domain in query
+        for domain in ("youtube.com/", "youtu.be/", "soundcloud.com/", "bandcamp.com/")
+    ):
+        try:
+            if query.startswith("artist:"):
+                artist_name = query.split(":", 1)[1].strip()
+                return get_search_results(artist_name)
+            return get_simple_songs([query])
+        except Exception as exc:
+            app_state.logger.error(f"Error resolving query {query}: {exc}")
+            return []
+
+    try:
+        return get_search_results(query)
+    except Exception as exc:
+        app_state.logger.error(f"Error searching '{query}': {exc}")
+        return []
 
 
 @router.get("/")
@@ -47,14 +219,23 @@ async def home(request: Request):
 
 
 @router.get("/search")
-async def search(q: Optional[str], request: Request):
+async def search(q: Optional[str] = None, request: Request = None):  # type: ignore
     """
-    Handle the search input.
+    Handle the search input and render results directly on initial page load.
     """
+    search_term = (q or "").strip()
+    songs: List[Song] = []
+    if search_term:
+        songs = await asyncio.to_thread(resolve_search_query, search_term)
+
     return templates.TemplateResponse(
         request=request,
         name="search.html.j2",
-        context={"__version__": __version__, "search_term": q},
+        context={
+            "__version__": __version__,
+            "search_term": search_term,
+            "songs": songs,
+        },
     )
 
 
@@ -122,26 +303,20 @@ async def handle_get_client_load(datastar_signals: ReadSignals):
 
 @router.get("/client/search")
 @datastar_response
-async def handle_get_client_search(datastar_signals: ReadSignals):
+async def handle_get_client_search(
+    datastar_signals: ReadSignals, q: Optional[str] = None
+):
     """
     Handle the search input.
     """
     app_state.logger.info("Loading search...")
     signals = handle_signals(datastar_signals)
-    app_state.logger.info(f"[{signals.client_id}] Search term: {signals.search_term}")
-    is_valid_url = validate_search_term(signals.search_term)
+    search_term = (q or signals.search_term or "").strip()
+    signals.search_term = search_term
+    app_state.logger.info(f"[{signals.client_id}] Search term: {search_term}")
 
-    if is_valid_url:
-        # redirect client to downloads page
-        app_state.logger.info(
-            f"[{signals.client_id}] Valid URL detected, redirecting to downloads..."
-        )
-        yield SSE.redirect("/downloads")
-        signals.song_url = signals.search_term
-        async for update in gen_download(signals):
-            yield update
+    songs = await asyncio.to_thread(resolve_search_query, search_term)
 
-    songs = get_search_results(signals.search_term)
     yield SSE.patch_elements(
         templates.get_template("search-list.html.j2").render(
             songs=songs,
@@ -338,7 +513,7 @@ async def gen_download(signals: Signals):
 
     try:
         # Fetch song metadata
-        song = Song.from_url(signals.song_url)
+        song = await asyncio.to_thread(Song.from_url, signals.song_url)
         app_state.logger.info(f"Downloading song: {song}")
 
         # Download Song

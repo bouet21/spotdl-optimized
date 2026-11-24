@@ -6,16 +6,15 @@
     </div>
     <button class="text-lg font-bold">spotDL</button>
   </div>
-  <div class="hidden sm:flex px-2 mx-2 navbar-center w-96 space-x-4">
-    <div id="search-input" data-signals="{search_term: '', loading: false}"
-      class="flex flex-row items-center space-x-4 w-full"
-      data-on-load="@get('/client/component/search-input-rotating-placeholder')">
+  <div class="flex px-2 mx-2 navbar-center w-96 space-x-4">
+    <form id="search-input" action="/search" method="get"
+      class="flex flex-row items-center space-x-2 w-full"
+      onsubmit="const b=document.getElementById('search-button'); if(b){b.classList.add('loading');}">
       {% include "search-input-rotating-placeholder.html.j2" %}
-      <button id="search-button" class="btn btn-circle btn-primary" data-on-click="goto('/search?q=' + $search_term )">
+      <button id="search-button" type="submit" class="btn btn-circle btn-primary">
         <iconify-icon icon="clarity:search-line" style="font-size: 24px"></iconify-icon>
-        {# <iconify-icon icon="clarity:download-line" style="font-size: 24px"></iconify-icon> #}
       </button>
-    </div>
+    </form>
   </div>
   <div class="navbar-end">
     <div id="status" class="btn btn-ghost btn-circle m-2">

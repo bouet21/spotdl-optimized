@@ -2,6 +2,7 @@
 Artist module for retrieving artist data from Spotify.
 """
 
+import concurrent.futures
 from dataclasses import dataclass
 from typing import Any, Dict, List, Set, Tuple
 
@@ -86,9 +87,23 @@ class Artist(SongList):
                     known_albums.add(album_name)
 
         songs = []
-        for album in albums:
-            album_obj = Album.from_url(album, fetch_songs=False)
-            songs.extend(album_obj.songs)
+        if len(albums) <= 1:
+            for album in albums:
+                album_obj = Album.from_url(album, fetch_songs=False)
+                songs.extend(album_obj.songs)
+        else:
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=min(8, len(albums))
+            ) as executor:
+                futures = [
+                    executor.submit(Album.from_url, album, False)
+                    for album in albums
+                ]
+                for future in futures:
+                    try:
+                        songs.extend(future.result().songs)
+                    except Exception:
+                        pass
 
         # Very aggressive deduplication
         songs_list = []

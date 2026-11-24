@@ -1,4 +1,26 @@
-<input id="input-rotating-placeholder" type="text" placeholder="{{ placeholder_item }}"
-    class="input input-bordered w-full text-base-content" data-bind="search_term"
-    data-on-keydown="evt.key === 'Enter' && goto('/search?q=' + $search_term )">
-</input>
+<input id="input-rotating-placeholder" name="q" type="text"
+    value="{{ search_term or '' }}"
+    placeholder="{{ placeholder_item or 'Busca artista, canción o pega un link de Spotify...' }}"
+    class="input input-bordered w-full text-base-content"
+    autocomplete="off" />
+<script>
+    (function () {
+        const input = document.getElementById("input-rotating-placeholder");
+        if (!input || input.dataset.placeholderInit) return;
+        input.dataset.placeholderInit = "1";
+        const items = [
+            "Busca artista, canción o pega un link de Spotify...",
+            "https://open.spotify.com/track/4vfN00PlILRXy5dcXHQE9M",
+            "Depresión Sonora",
+            "Radiohead",
+            "https://open.spotify.com/playlist/37i9dQZF1E8UXBoz02kGID"
+        ];
+        let idx = 0;
+        setInterval(() => {
+            if (document.activeElement !== input && !input.value) {
+                idx = (idx + 1) % items.length;
+                input.placeholder = items[idx];
+            }
+        }, 5000);
+    })();
+</script>

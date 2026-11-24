@@ -109,7 +109,7 @@ def meta(query: List[str], downloader: Downloader) -> None:
                 logger.error("Could not find metadata for %s", file.name)
                 return None
 
-            song = search_results[0]
+            song = reinit_song(search_results[0])
         else:
             # Song has metadata, so we use it to reinitialize the song object
             # and fill in the missing metadata
